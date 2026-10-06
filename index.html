@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>나방의 유전 알고리즘</title>
+  <style>
+    :root { color-scheme: light; --ink:#203a2a; --muted:#617061; --paper:#f7f8f1; --green:#2b6339; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#edf1e8; color:var(--ink); font-family:system-ui,-apple-system,"Malgun Gothic",sans-serif; }
+    main { width:min(1180px,100%); margin:auto; padding:22px 18px 36px; }
+    h1 { margin:0 0 5px; font-size:clamp(1.35rem,3vw,2rem); }
+    .subtitle { margin:0; color:var(--muted); font-size:.94rem; }
+    .panel { margin-top:16px; padding:14px; background:var(--paper); border:1px solid #d9dfd3; border-radius:14px; box-shadow:0 5px 18px #203a2a0c; }
+    .controls { display:flex; flex-wrap:wrap; align-items:center; gap:9px; }
+    button { border:0; border-radius:8px; padding:10px 14px; color:#fff; background:var(--green); font:inherit; font-weight:650; cursor:pointer; }
+    button.secondary { background:#526651; }
+    button:disabled { cursor:not-allowed; opacity:.45; }
+    .status { margin-left:auto; font-weight:700; color:#33583a; }
+    .rate { display:flex; align-items:center; gap:8px; color:#455648; font-size:.9rem; }
+    input[type=range] { width:145px; accent-color:var(--green); }
+    .canvas-wrap { overflow:hidden; }
+    canvas { display:block; width:100%; height:auto; }
+    #scene { aspect-ratio:11/7; border-radius:9px; background:#dce8cf; cursor:pointer; }
+    .legend { display:flex; flex-wrap:wrap; gap:7px 13px; padding:10px 3px 1px; font-size:.78rem; color:#465448; }
+    .legend-item { display:inline-flex; align-items:center; gap:5px; }
+    .swatch { width:13px; height:13px; border:1px solid #586657; border-radius:3px; display:inline-block; }
+    #selected { min-height:25px; margin-top:7px; color:#445447; font-size:.9rem; }
+    .chart-title { margin:0 0 4px; font-size:1rem; }
+    #chart { aspect-ratio:980/190; }
+    .table-scroll { overflow-x:auto; }
+    table { width:100%; min-width:720px; border-collapse:collapse; font-size:.83rem; text-align:center; }
+    th,td { padding:6px 4px; border-bottom:1px solid #e1e6dd; }
+    th:first-child, td:first-child { text-align:left; white-space:nowrap; }
+    .best-row td:first-child { color:#b65c27; font-weight:700; }
+    .avg-row td:first-child { color:#356c46; font-weight:700; }
+    .note { margin:10px 0 0; color:var(--muted); font-size:.82rem; }
+    @media(max-width:650px) { main{padding:15px 10px 25px}.panel{padding:10px}.status{width:100%;margin:2px 0 0}.controls button{padding:9px 11px}.rate{width:100%}input[type=range]{flex:1} }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>숲의 나방 찾기</h1>
+    <p class="subtitle">날개 색과 무늬를 유전해 가며 나무 몸통 색에 어울리는 나방을 찾아갑니다.</p>
+  </header>
+  <section class="panel controls" aria-label="시뮬레이션 조작">
+    <button id="step">다음 단계</button>
+    <button id="auto">자동 실행</button>
+    <button id="reset" class="secondary">새 숲 · 처음부터</button>
+    <label class="rate" for="mutation">변이 확률 <strong id="rate-label">12%</strong>
+      <input id="mutation" type="range" min="0" max="0.5" step="0.01" value="0.12">
+    </label>
+    <div class="status" id="status" aria-live="polite"></div>
+  </section>
+  <section class="panel canvas-wrap">
+    <canvas id="scene" width="1100" height="700" aria-label="초록 잎과 무늬 있는 갈색 나무 몸통 속 나방 12마리"></canvas>
+    <div id="legend" class="legend" aria-label="나방 날개 색 코드"></div>
+    <div id="selected" aria-live="polite">나방을 클릭하면 날개 유전자와 적합도를 볼 수 있습니다.</div>
+  </section>
+  <section class="panel">
+    <h2 class="chart-title">세대별 결과 — x축: 세대, y축: 적합도 (%)</h2>
+    <canvas id="chart" width="980" height="190" aria-label="세대별 최고 및 평균 적합도 그래프"></canvas>
+    <div class="table-scroll">
+      <table id="scores" aria-label="세대별 최고 및 평균 적합도 수치"></table>
+    </div>
+    <p class="note">한 세대는 평가 → 부모 선택 → 교차 → 변이 → 세대 교체 순으로 진행합니다. 초기 개체군을 1세대로 세어 총 10세대이며, 완료 후 결과는 이 화면에 유지됩니다.</p>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const W=1100, H=700, POP=12, GENERATIONS=10;
+  const wingPalette=[
+    [42,103,65],[80,130,74],[130,161,83],[177,151,92],[104,75,55],
+    [70,119,132],[180,111,73],[196,184,141],[119,91,143],[218,119,145]
+  ];
+  const colorNames=['숲 초록','잎 초록','연두','황갈색','나무 갈색','청록','주황 갈색','베이지','보라','분홍'];
+  const barkPalette=[
+    [76,43,29],[94,54,35],[111,65,42],[128,76,49],[145,88,57],
+    [158,101,67],[126,80,58],[171,116,79],[102,70,52],[190,137,94]
+  ];
+  const leafPalette=[[43,105,55],[57,127,62],[75,145,68],[91,157,78]];
+  const scene=document.querySelector('#scene'), ctx=scene.getContext('2d');
+  const chart=document.querySelector('#chart'), cctx=chart.getContext('2d');
+  const $=s=>document.querySelector(s);
+  let generation=1, phase='ready', running=false, timer=null, selected=-1;
+  let mutationRate=.12, moths=[], parents=[], children=[], forest={}, bestHistory=[], avgHistory=[];
+  const rand=(a,b)=>Math.random()*(b-a)+a;
+  const randint=(a,b)=>Math.floor(rand(a,b+1));
+  const hex=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
+  const rgbDistance=(a,b)=>Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]);
+  function makeMoth(colors=null,spots=null){return {colors:colors?colors.slice():[randint(0,9),randint(0,9),randint(0,9)],spots:spots??randint(2,6),score:0,mutations:[]};}
+  function position(i){return {x:155+(i%6)*158,y:195+Math.floor(i/6)*195};}
+  function makeForest(){
+    const patches=[];
+    for(let n=0;n<180;n++){
+      const x=rand(95,1005),y=rand(125,665),rx=randint(15,52),ry=randint(12,38);
+      const left=110-(y-80)*100/620,right=990+(y-80)*100/620;
+      if(left+rx+10<=x&&x<=right-rx-10) patches.push({x,y,rx,ry,color:randint(0,9)});
+    }
+    return {base:randint(0,9),patches,leafBlobs:Array.from({length:38},()=>({x:randint(35,1065),y:randint(-55,225),rx:randint(18,55),ry:randint(15,38),color:randint(0,3)}))};
+  }
+  function barkAt(x,y){
+    if(y<80||y>700)return barkPalette[forest.base];
+    const left=110-(y-80)*100/620,right=990+(y-80)*100/620;
+    if(x<left||x>right)return barkPalette[forest.base];
+    for(let i=forest.patches.length-1;i>=0;i--){const p=forest.patches[i];if(((x-p.x)/p.rx)**2+((y-p.y)/p.ry)**2<=1)return barkPalette[p.color];}
+    return barkPalette[forest.base];
+  }
+  function fitness(moth,index){
+    const {x,y}=position(index);let total=0,count=0;
+    for(const side of [-1,1])for(let px=0;px<54;px+=3)for(let py=0;py<36;py+=3){
+      if(py>36*(1-px/54)+7)continue;
+      const bg=barkAt(x+side*(7+px*.72),y-5+py*.72);
+      const wing=wingPalette[moth.colors[Math.floor(px/9)%3]];
+      total+=rgbDistance(bg,wing);count++;
+    }
+    const mean=total/Math.max(count,1);
+    return Math.max(0,100*(1-mean/(Math.sqrt(3)*255)));
+  }
+  function evaluate(){
+    moths.forEach((m,i)=>m.score=fitness(m,i));
+    bestHistory.push(Math.max(...moths.map(m=>m.score)));
+    avgHistory.push(moths.reduce((s,m)=>s+m.score,0)/moths.length);
+  }
+  function selectParent(){
+    const weights=moths.map(m=>m.score+1),total=weights.reduce((a,b)=>a+b,0);let pick=Math.random()*total;
+    for(let i=0;i<moths.length;i++){pick-=weights[i];if(pick<=0)return moths[i];}
+    return moths[moths.length-1];
+  }
+  function renderTree(){
+    ctx.fillStyle='#dce8cf';ctx.fillRect(0,0,W,H);
+    ctx.beginPath();ctx.ellipse(550,70,522,165,0,0,Math.PI*2);ctx.fillStyle=hex(leafPalette[1]);ctx.fill();ctx.strokeStyle='#315e39';ctx.lineWidth=3;ctx.stroke();
+    for(const p of forest.leafBlobs){if(((p.x-550)/515)**2+((p.y-70)/165)**2<=1){ctx.beginPath();ctx.ellipse(p.x,p.y,p.rx,p.ry,0,0,Math.PI*2);ctx.fillStyle=hex(leafPalette[p.color]);ctx.fill();}}
+    const trunkPath=()=>{ctx.beginPath();ctx.moveTo(110,80);ctx.lineTo(990,80);ctx.lineTo(1090,700);ctx.lineTo(10,700);ctx.closePath();};
+    trunkPath();ctx.fillStyle=hex(barkPalette[forest.base]);ctx.fill();
+    for(const p of forest.patches){ctx.beginPath();ctx.ellipse(p.x,p.y,p.rx,p.ry,0,0,Math.PI*2);ctx.fillStyle=hex(barkPalette[p.color]);ctx.fill();}
+    trunkPath();ctx.strokeStyle='#553522';ctx.lineWidth=4;ctx.stroke();
+  }
+  function drawMoth(x,y,m,index){
+    const parent=parents.includes(m),outline=selected===index?'#3448aa':parent?'#f4c84a':'#566650';
+    ctx.beginPath();ctx.ellipse(x,y,7,20,0,0,Math.PI*2);ctx.fillStyle='#594b3f';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=outline;ctx.stroke();
+    for(const side of [-1,1])for(let stripe=0;stripe<6;stripe++){
+      const near=x+side*(7+stripe*8),far=x+side*(15+stripe*8),top=y-17+stripe*2,bottom=top+34-stripe*3;
+      ctx.beginPath();ctx.moveTo(near,top);ctx.lineTo(far,top+5);ctx.lineTo(far,bottom);ctx.lineTo(near,bottom-3);ctx.closePath();
+      ctx.fillStyle=hex(wingPalette[m.colors[Math.floor(stripe/2)%3]]);ctx.fill();ctx.strokeStyle=outline;ctx.lineWidth=1;ctx.stroke();
+    }
+    for(let j=0;j<m.spots;j++){const sx=x-22+(j%3)*19,sy=y-7+Math.floor(j/3)*12;ctx.beginPath();ctx.arc(sx,sy,2.2,0,Math.PI*2);ctx.fillStyle=hex(wingPalette[m.colors[1]]);ctx.fill();}
+    ctx.fillStyle='#263b2b';ctx.font='bold 13px system-ui';ctx.textAlign='center';ctx.fillText(`#${index+1}  ${m.score.toFixed(1)}%`,x,y+42);
+    if(m.mutations.length){ctx.fillStyle='#c0442e';ctx.font='bold 12px system-ui';ctx.fillText('✦ 변이',x+55,y-27);}
+  }
+  function drawScene(){
+    renderTree();ctx.fillStyle='#173c24';ctx.font='13px system-ui';ctx.textAlign='left';
+    ctx.fillText('초록 잎 아래 넓은 갈색 몸통 안에 나방 12마리가 있습니다. 나방을 클릭해 유전자를 확인하세요.',14,20);
+    moths.forEach((m,i)=>{const p=position(i);drawMoth(p.x,p.y,m,i);});
+    const colors=['#d47736','#477c55'];ctx.font='12px system-ui';ctx.textAlign='right';
+    ctx.fillStyle=colors[0];ctx.fillText('● 최고 적합도',W-155,28);ctx.fillStyle=colors[1];ctx.fillText('● 평균 적합도',W-16,28);
+    $('#status').textContent=`세대 ${generation}/${GENERATIONS} · ${phaseText()}`;
+    drawChart();drawScoreTable();drawSelected();
+  }
+  function phaseText(){return ({ready:'평가 완료 · 부모 선택 대기',selected:'부모 선택 완료',crossed:'교차 완료',mutated:'변이 완료',done:'완료 · 결과 유지 중'})[phase];}
+  function drawChart(){
+    const cw=980,ch=190,left=55,right=963,top=22,bottom=130;cctx.clearRect(0,0,cw,ch);
+    cctx.font='11px system-ui';cctx.textAlign='right';cctx.textBaseline='middle';
+    for(const value of [0,25,50,75,100]){const yy=bottom-value*(bottom-top)/100;cctx.strokeStyle='#d7dfd0';cctx.beginPath();cctx.moveTo(left,yy);cctx.lineTo(right,yy);cctx.stroke();cctx.fillStyle='#52634f';cctx.fillText(value,left-8,yy);}
+    cctx.strokeStyle='#667660';cctx.beginPath();cctx.moveTo(left,top);cctx.lineTo(left,bottom);cctx.lineTo(right,bottom);cctx.stroke();
+    const pts=(arr)=>arr.map((v,i)=>({x:left+i*(right-left)/(GENERATIONS-1),y:bottom-v*(bottom-top)/100,v}));
+    const series=[[pts(bestHistory),'#d47736'],[pts(avgHistory),'#477c55']];
+    for(const [data,color] of series){if(data.length>1){cctx.beginPath();data.forEach((p,i)=>i?cctx.lineTo(p.x,p.y):cctx.moveTo(p.x,p.y));cctx.strokeStyle=color;cctx.lineWidth=2.5;cctx.stroke();}
+      for(const p of data){cctx.beginPath();cctx.arc(p.x,p.y,3.5,0,Math.PI*2);cctx.fillStyle=color;cctx.fill();}}
+    cctx.textAlign='center';cctx.textBaseline='top';cctx.fillStyle='#263b2b';
+    for(let i=0;i<GENERATIONS;i++){const xx=left+i*(right-left)/(GENERATIONS-1);cctx.beginPath();cctx.moveTo(xx,bottom);cctx.lineTo(xx,bottom+4);cctx.strokeStyle='#667660';cctx.stroke();cctx.fillText(String(i+1),xx,bottom+7);}
+    cctx.textAlign='center';cctx.fillText('세대',cw/2,ch-13);
+    cctx.save();cctx.translate(12,(top+bottom)/2);cctx.rotate(-Math.PI/2);cctx.fillText('적합도 (%)',0,0);cctx.restore();
+  }
+  function drawScoreTable(){
+    const table=$('#scores');const gens=Array.from({length:bestHistory.length},(_,i)=>`<th>${i+1}세대</th>`).join('');
+    const best=bestHistory.map(v=>`<td>${v.toFixed(1)}</td>`).join(''),avg=avgHistory.map(v=>`<td>${v.toFixed(1)}</td>`).join('');
+    table.innerHTML=`<thead><tr><th>적합도 (%)</th>${gens}</tr></thead><tbody><tr class="best-row"><td>최고</td>${best}</tr><tr class="avg-row"><td>평균</td>${avg}</tr></tbody>`;
+  }
+  function drawSelected(){
+    if(selected<0){$('#selected').textContent='나방을 클릭하면 날개 유전자와 적합도를 볼 수 있습니다.';return;}
+    const m=moths[selected];$('#selected').textContent=`나방 #${selected+1} · 적합도 ${m.score.toFixed(1)}% · 날개색 순서 ${m.colors.map(i=>`${colorNames[i]}(${i})`).join(' → ')} 반복 · 무늬 ${m.spots}개 · 변이 유전자 ${m.mutations.length?m.mutations.join(', '):'없음'}`;
+  }
+  function updateButtons(){const done=phase==='done';$('#step').disabled=done;$('#auto').disabled=done;$('#auto').textContent=running?'일시정지':'자동 실행';}
+  function step(){
+    if(phase==='done')return;
+    if(phase==='ready'){parents=[selectParent(),selectParent()];phase='selected';}
+    else if(phase==='selected'){
+      const next=[moths.reduce((a,b)=>a.score>b.score?a:b)];
+      while(next.length<POP){const a=selectParent(),b=selectParent();const colors=[0,1,2].map(j=>Math.random()<.5?a.colors[j]:b.colors[j]);next.push(makeMoth(colors,Math.random()<.5?a.spots:b.spots));}
+      children=next;phase='crossed';
+    } else if(phase==='crossed'){
+      for(const child of children.slice(1)){
+        for(let j=0;j<3;j++)if(Math.random()<mutationRate){child.colors[j]=randint(0,9);child.mutations.push(j);}
+        if(Math.random()<mutationRate){child.spots=randint(2,6);child.mutations.push(3);}
+      }
+      phase='mutated';
+    } else if(phase==='mutated'){
+      if(generation<GENERATIONS){moths=children;generation++;parents=[];evaluate();phase=generation===GENERATIONS?'done':'ready';}
+      else phase='done';
+    }
+    updateButtons();drawScene();
+    if(phase==='done'){running=false;clearInterval(timer);updateButtons();}
+  }
+  function toggleAuto(){
+    if(phase==='done')return;
+    running=!running;updateButtons();
+    if(running)timer=setInterval(()=>{if(!running){clearInterval(timer);return;}step();},650);
+    else clearInterval(timer);
+  }
+  function reset(){
+    running=false;clearInterval(timer);generation=1;phase='ready';selected=-1;parents=[];children=[];
+    forest=makeForest();moths=Array.from({length:POP},()=>makeMoth());bestHistory=[];avgHistory=[];evaluate();
+    updateButtons();drawScene();
+  }
+  scene.addEventListener('click',event=>{
+    const rect=scene.getBoundingClientRect(),x=(event.clientX-rect.left)*W/rect.width,y=(event.clientY-rect.top)*H/rect.height;
+    let hit=-1;moths.forEach((m,i)=>{const p=position(i);if(Math.abs(x-p.x)<75&&Math.abs(y-p.y)<62)hit=i;});
+    if(hit>=0){selected=hit;drawScene();}
+  });
+  $('#step').addEventListener('click',step);$('#auto').addEventListener('click',toggleAuto);$('#reset').addEventListener('click',reset);
+  $('#mutation').addEventListener('input',event=>{mutationRate=Number(event.target.value);$('#rate-label').textContent=`${Math.round(mutationRate*100)}%`;});
+  $('#legend').innerHTML=wingPalette.map((c,i)=>`<span class="legend-item"><i class="swatch" style="background:${hex(c)}"></i>${i}: ${colorNames[i]}</span>`).join('');
+  reset();
+})();
+</script>
+</body>
+</html>
